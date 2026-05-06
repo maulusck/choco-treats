@@ -1,61 +1,65 @@
 #!/usr/bin/env bash
-set -e
-echo "== NUGET TEST SUITE (CURL + NUGET NO CONFIG) =="
+set -euo pipefail
 
 BASE="http://localhost:8080"
+FAIL=0
 
-# 1. root service doc
-echo -n "[root] "
-curl -s -o /dev/null -w "%{http_code}\n" "$BASE/"
+GREEN="\033[0;32m"
+RED="\033[0;31m"
+NC="\033[0m"
 
-# 2. packages feed exists
-echo -n "[feed] "
-curl -s "$BASE/Packages" | grep -q "<feed" && echo "OK" || echo "FAIL"
+ok()  { printf "%-28s ${GREEN}OK${NC}\n" "$1"; }
+fail() { printf "%-28s ${RED}FAIL${NC}\n" "$1"; FAIL=1; }
 
-# 3. count present
-echo -n "[count] "
-curl -s "$BASE/Packages" | grep -q "<m:count>" && echo "OK" || echo "FAIL"
+http() {
+  local name=$1 url=$2
+  local code
+  code=$(curl -s -o /dev/null -w "%{http_code}" "$url")
+  [[ "$code" == "200" ]] && ok "$name" || { echo "  HTTP $code"; fail "$name"; }
+}
 
-# 4. git exact match
-echo -n "[git exact] "
-curl -s "$BASE/Packages?\$filter=Id%20eq%20'git.install'" | grep -q "git.install" && echo "OK" || echo "FAIL"
+xml() {
+  local name=$1 url=$2 xpath=$3
+  curl -s "$url" | xq -x "$xpath" >/dev/null 2>&1 && ok "$name" || fail "$name"
+}
 
-# 5. git fuzzy match
-echo -n "[git fuzzy] "
-curl -s "$BASE/Packages?\$filter=substringof('git',tolower(Id))" | grep -q "git.install" && echo "OK" || echo "FAIL"
+nuget_has() {
+  local name=$1 term=$2
+  ./bin/nuget search "$term" -Source "$BASE/Packages" -NonInteractive 2>/dev/null \
+    | tr -d '\r' \
+    | grep -qi "$name" && ok "nuget $term" || fail "nuget $term"
+}
 
-# 6. 7zip exact match
-echo -n "[7zip] "
-curl -s "$BASE/Packages?\$filter=Id%20eq%20'7zip.install'" | grep -q "7zip.install" && echo "OK" || echo "FAIL"
+echo "== NUGET TESTS =="
 
-# 7. FindPackagesById
-echo -n "[find id] "
-curl -s "$BASE/FindPackagesById()?id='git.install'" | grep -q "git.install" && echo "OK" || echo "FAIL"
+xml "metadata" "$BASE/" "//collection[@href='Packages']"
+xml "feed" "$BASE/Packages" "//*[local-name()='feed']"
+xml "count" "$BASE/Packages" "//*[local-name()='count']"
 
-# 8. download git headers
-echo -n "[dl git] "
-curl -s -I "$BASE/package/git.install/2.54.0" | grep -q "200 OK" && echo "OK" || echo "FAIL"
+xml "git exact" "$BASE/Packages?\$filter=Id%20eq%20'git.install'" \
+"//*[local-name()='Id'][text()='git.install']"
 
-# 9. download 7zip headers
-echo -n "[dl 7zip] "
-curl -s -I "$BASE/package/7zip.install/26.0.0" | grep -q "200 OK" && echo "OK" || echo "FAIL"
+xml "git fuzzy" "$BASE/Packages?\$filter=substringof('git',tolower(Id))" \
+"//*[local-name()='Id']"
 
-# 10. missing package safety
-echo -n "[missing] "
-curl -s "$BASE/Packages?\$filter=Id%20eq%20'doesnotexist'" | grep -q "<feed" && echo "OK" || echo "FAIL"
+xml "7zip exact" "$BASE/Packages?\$filter=Id%20eq%20'7zip.install'" \
+"//*[local-name()='Id'][text()='7zip.install']"
 
-# 11. metadata endpoint sanity
-echo -n "[metadata] "
-curl -s "$BASE/" | grep -q "<collection href=\"Packages\"" && echo "OK" || echo "FAIL"
+xml "find id" "$BASE/FindPackagesById()?id='git.install'" \
+"//*[local-name()='Id'][text()='git.install']"
 
-# ─────────────────────────────
-# 12. NUGET CLI TEST (NO CONFIG)
-# ─────────────────────────────
+http "download git" "$BASE/package/git.install/2.54.0"
+http "download 7zip" "$BASE/package/7zip.install/26.0.0"
 
-echo "[nuget search git]"
-./bin/nuget search git -Source "$BASE/Packages" -NonInteractive 2>/dev/null | grep -q "git.install" && echo "OK" || echo "FAIL"
+xml "missing safe" "$BASE/Packages?\$filter=Id%20eq%20'doesnotexist'" \
+"//*[local-name()='feed']"
 
-echo "[nuget search 7zip]"
-./bin/nuget search 7zip -Source "$BASE/Packages" -NonInteractive 2>/dev/null | grep -q "7zip.install" && echo "OK" || echo "FAIL"
+echo ""
+echo "== NUGET CLI =="
 
-echo "== DONE =="
+nuget_has "git.install" "git"
+nuget_has "7zip.install" "7zip"
+
+echo ""
+[[ "$FAIL" -eq 0 ]] && echo -e "${GREEN}ALL PASS${NC}" || echo -e "${RED}$FAIL FAILURES${NC}"
+exit $FAIL
