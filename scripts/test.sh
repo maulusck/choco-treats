@@ -8,7 +8,7 @@ GREEN="\033[0;32m"
 RED="\033[0;31m"
 NC="\033[0m"
 
-ok()  { printf "%-28s ${GREEN}OK${NC}\n" "$1"; }
+ok()   { printf "%-28s ${GREEN}OK${NC}\n" "$1"; }
 fail() { printf "%-28s ${RED}FAIL${NC}\n" "$1"; FAIL=1; }
 
 http() {
@@ -28,6 +28,28 @@ nuget_has() {
   ./bin/nuget search "$term" -Source "$BASE/Packages" -NonInteractive 2>/dev/null \
     | tr -d '\r' \
     | grep -qi "$name" && ok "nuget $term" || fail "nuget $term"
+}
+
+download() {
+  local name=$1 url=$2
+
+  # stream check (no file creation)
+  local bytes
+  bytes=$(curl -s "$url" | tee >(head -c 4 | grep -q PK && echo "zip=ok" || echo "zip=fail") | wc -c)
+
+  if [[ "$bytes" -gt 0 ]]; then
+    ok "$name dl"
+  else
+    fail "$name dl"
+    return
+  fi
+
+  # ZIP signature check result (from subshell output)
+  if curl -s "$url" | head -c 4 | grep -q PK; then
+    ok "$name zip"
+  else
+    fail "$name zip"
+  fi
 }
 
 echo "== NUGET TESTS =="
@@ -50,6 +72,9 @@ xml "find id" "$BASE/FindPackagesById()?id='git.install'" \
 
 http "download git" "$BASE/package/git.install/2.54.0"
 http "download 7zip" "$BASE/package/7zip.install/26.0.0"
+
+download "git.install" "$BASE/package/git.install/2.54.0"
+download "7zip.install" "$BASE/package/7zip.install/26.0.0"
 
 xml "missing safe" "$BASE/Packages?\$filter=Id%20eq%20'doesnotexist'" \
 "//*[local-name()='feed']"
