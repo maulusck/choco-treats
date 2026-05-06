@@ -159,7 +159,7 @@ function package_entry(array $pkg): string {
     <summary type="text">{$summary}</summary>
     <updated>{$pub}</updated>
     <author><name>{$authors}</name></author>
-    <link rel="edit-media" title="Package" href="Packages(Id='{$id}',Version='{$version}')/$value" />
+    <link rel="edit-media" title="Package" href="Packages(Id='{$id}',Version='{$version}')/\$value" />
     <link rel="edit" title="Package" href="Packages(Id='{$id}',Version='{$version}')" />
     <content type="application/zip" src="{$dlUrl}" />
     <m:properties xmlns:m="http://schemas.microsoft.com/ado/2007/08/dataservices/metadata"
