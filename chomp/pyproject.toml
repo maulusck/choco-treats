@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chomp"
+version = "1.0.0"
+description = "Chocolatey Handler for Offline Package Mirroring & Processing"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+chomp = "chomp.cli:entry_point"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["chomp*"]
+
+[tool.black]
+line-length = 88
+target-version = ["py311"]
+
+[tool.isort]
+profile = "black"
+line_length = 88
+py_version = 311
