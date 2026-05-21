@@ -21,3 +21,4 @@ where = ["src"]
 include = ["chomp*"]
 
 [tool.setuptools_scm]
+root = ".."

@@ -25,7 +25,7 @@ jobs:
       - name: Build chomp
         run: |
           pip install build setuptools-scm
-          SETUPTOOLS_SCM_ROOT=.. python -m build chomp
+          python -m build chomp
           mkdir -p dist/chomp
           cp chomp/dist/* dist/chomp/
 
