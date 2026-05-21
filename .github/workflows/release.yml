@@ -5,39 +5,51 @@ on:
     tags:
       - "v*"
 
+permissions:
+  contents: write
+
 jobs:
-  build:
+  build-chomp:
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Install build tool
-        run: pip install build
+      - name: Install build tools
+        run: pip install build setuptools-scm
 
-      # -------- CHOMP BUILD --------
-      - name: Build chomp (sdist + wheel)
+      - name: Build chomp
         working-directory: chomp
         run: python -m build
 
       - name: Rename chomp artifacts
         run: |
           mkdir -p dist_out
+          cp chomp/dist/* dist_out/
 
-          cp chomp/dist/*.tar.gz dist_out/
-          cp chomp/dist/*.whl dist_out/
+      - name: Upload chomp artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: chomp
+          path: dist_out/*
 
-      # -------- MUFFIN PACKAGE --------
-      - name: Create muffin archives (exclude hidden files)
+  build-muffin:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create muffin archive (exclude hidden files)
         run: |
           mkdir -p muffin_stage
 
-          # copy only non-hidden files
           rsync -av \
             --exclude=".*" \
             muffin/ muffin_stage/
@@ -45,11 +57,34 @@ jobs:
           tar -czf muffin.tar.gz -C muffin_stage .
           zip -r muffin.zip muffin_stage
 
-      # -------- RELEASE --------
-      - name: Create GitHub release
+      - name: Upload muffin artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: muffin
+          path: |
+            muffin.tar.gz
+            muffin.zip
+
+  release:
+    needs: [build-chomp, build-muffin]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download chomp
+        uses: actions/download-artifact@v4
+        with:
+          name: chomp
+          path: dist/chomp
+
+      - name: Download muffin
+        uses: actions/download-artifact@v4
+        with:
+          name: muffin
+          path: dist/muffin
+
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist_out/*
-            muffin.tar.gz
-            muffin.zip
+            dist/chomp/*
+            dist/muffin/*
