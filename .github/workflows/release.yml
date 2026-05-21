@@ -25,10 +25,9 @@ jobs:
       - name: Build chomp
         run: |
           pip install build setuptools-scm
-          cd chomp
-          python -m build
-          mkdir -p ../dist/chomp
-          cp dist/* ../dist/chomp/
+          python -m build chomp
+          mkdir -p dist/chomp
+          cp chomp/dist/* dist/chomp/
 
       # ---------- MUFFIN ----------
       - name: Build muffin
