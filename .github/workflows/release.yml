@@ -32,18 +32,17 @@ jobs:
       # ---------- MUFFIN ----------
       - name: Build muffin
         run: |
+          VERSION=${GITHUB_REF_NAME#v}
           mkdir -p dist/muffin_stage
-
           rsync -a muffin/ dist/muffin_stage/ --exclude=".*"
-
-          tar -czf dist/muffin.tar.gz -C dist/muffin_stage .
-          zip -r dist/muffin.zip dist/muffin_stage
+          tar -czf dist/muffin-${VERSION}.tar.gz -C dist/muffin_stage .
+          zip -r dist/muffin-${VERSION}.zip dist/muffin_stage
 
       # ---------- RELEASE ----------
       - name: Create release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             dist/chomp/*
-            dist/muffin.tar.gz
-            dist/muffin.zip
+            dist/muffin-*.tar.gz
+            dist/muffin-*.zip
