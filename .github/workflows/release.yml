@@ -1,0 +1,55 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build tool
+        run: pip install build
+
+      # -------- CHOMP BUILD --------
+      - name: Build chomp (sdist + wheel)
+        working-directory: chomp
+        run: python -m build
+
+      - name: Rename chomp artifacts
+        run: |
+          mkdir -p dist_out
+
+          cp chomp/dist/*.tar.gz dist_out/
+          cp chomp/dist/*.whl dist_out/
+
+      # -------- MUFFIN PACKAGE --------
+      - name: Create muffin archives (exclude hidden files)
+        run: |
+          mkdir -p muffin_stage
+
+          # copy only non-hidden files
+          rsync -av \
+            --exclude=".*" \
+            muffin/ muffin_stage/
+
+          tar -czf muffin.tar.gz -C muffin_stage .
+          zip -r muffin.zip muffin_stage
+
+      # -------- RELEASE --------
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist_out/*
+            muffin.tar.gz
+            muffin.zip
