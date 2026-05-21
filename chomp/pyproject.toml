@@ -13,6 +13,14 @@ dependencies = []
 [project.scripts]
 chomp = "chomp.cli:entry_point"
 
+[tool.black]
+line-length = 88
+target-version = ["py311"]
+
+[tool.isort]
+profile = "black"
+line_length = 88
+
 [tool.setuptools]
 package-dir = { "" = "src" }
 
