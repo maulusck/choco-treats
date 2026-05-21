@@ -69,11 +69,11 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def _get_version():
+def _get_version(pkg_name="chomp", display_name="CHOMP"):
     try:
-        return version("chomp")
+        return f"{display_name} {version(pkg_name)}"
     except PackageNotFoundError:
-        return "dev"
+        return f"{display_name} dev"
 
 
 def main(argv=None) -> int:
