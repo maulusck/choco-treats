@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=80"]
+requires = ["setuptools>=80", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "chomp"
-version = "1.0.0"
+dynamic = ["version"]
 description = "Chocolatey Handler for Offline Package Mirroring & Processing"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -13,15 +13,14 @@ dependencies = []
 [project.scripts]
 chomp = "chomp.cli:entry_point"
 
+[tool.setuptools]
+package-dir = { "" = "src" }
+
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["chomp*"]
 
-[tool.black]
-line-length = 88
-target-version = ["py311"]
-
-[tool.isort]
-profile = "black"
-line_length = 88
-py_version = 311
+[tool.setuptools_scm]
+version_scheme = "post-release"
+local_scheme = "no-local-version"
+fallback_version = "0.0.0-dev"

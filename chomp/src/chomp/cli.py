@@ -3,6 +3,7 @@
 import argparse
 import sys
 import tempfile
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from .config import (
@@ -64,8 +65,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true", help=CLI_HELP["dry_run"])
     p.add_argument("-q", "--quiet", action="store_true", help=CLI_HELP["quiet"])
     p.add_argument("-v", "--verbose", action="store_true", help=CLI_HELP["verbose"])
-
+    p.add_argument("-V", "--version", action="version", version=_get_version())
     return p
+
+
+def _get_version():
+    try:
+        return version("chomp")
+    except PackageNotFoundError:
+        return "dev"
 
 
 def main(argv=None) -> int:
