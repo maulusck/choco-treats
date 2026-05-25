@@ -67,6 +67,10 @@ def _prompt_url(item: dict, dest: Path) -> dict:
         print(f"  {warn('?')} Enter, s, or e.")
 
 
+def _item_key(item: dict) -> tuple:
+    return (item["package"], item.get("version", ""), item["filename"])
+
+
 def download_batch(
     items: list[dict],
     installer_dir: Path,
@@ -82,7 +86,7 @@ def download_batch(
         print(f"\n{info('── Review URLs (all decisions before downloads start) ──')}")
         resolved, seen = [], set()
         for item in items:
-            key = (item["package"], item.get("version", ""), item["filename"])
+            key = _item_key(item)
             dest = installer_path(item, installer_dir)
             if key in seen:
                 resolved.append(
@@ -101,17 +105,16 @@ def download_batch(
     seen, results = set(), []
     for item in items:
         url = item.get("resolved_url", item["old_url"])
-        key = (item["package"], item.get("version", ""), item["filename"])
+        key = _item_key(item)
         action = item.get("action")
         dest = installer_path(item, installer_dir)
 
-        # Pre-resolved (interactive)
-        if action == "duplicate":
+        if action == "duplicate" or (action is None and key in seen):
             results.append(
                 {**item, "downloaded": "skipped-duplicate", "skip_reason": ""}
             )
             continue
-        if action == "exists":
+        if action == "exists" or (action is None and dest.exists() and not force):
             if not quiet:
                 print(f"  {SKIP} {dim('exists:')} {dim(str(dest))}")
             results.append({**item, "downloaded": "skipped-exists", "skip_reason": ""})
@@ -126,22 +129,8 @@ def download_batch(
             )
             continue
 
-        # Non-interactive dedup
-        if key in seen:
-            results.append(
-                {**item, "downloaded": "skipped-duplicate", "skip_reason": ""}
-            )
-            continue
         seen.add(key)
 
-        # Skip-if-exists (unless --force)
-        if dest.exists() and not force:
-            if not quiet:
-                print(f"  {SKIP} {dim('exists:')} {dim(str(dest))}")
-            results.append({**item, "downloaded": "skipped-exists", "skip_reason": ""})
-            continue
-
-        # URL classification
         should_dl, skip_reason = classify_url(url)
         if not should_dl:
             if not quiet:
@@ -151,7 +140,14 @@ def download_batch(
             )
             continue
 
-        dest.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            print(f"  {CROSS} {err('mkdir failed:')} {dim(str(e))}")
+            results.append(
+                {**item, "downloaded": "failed", "skip_reason": f"mkdir: {e}"}
+            )
+            continue
         success, err_msg = _download_one(url, dest, use_pwsh)
         results.append(
             {

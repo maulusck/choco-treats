@@ -47,7 +47,7 @@ def validate_mode(mode: str) -> str:
 
 
 def get_repo_root() -> Path:
-    return Path(os.environ.get("CHOMP_REPO", "./chomp")).resolve()
+    return Path(os.environ.get("CHOMP_REPO", "./chomp.out")).resolve()
 
 
 def repo_path(root: Path, key: str) -> Path:

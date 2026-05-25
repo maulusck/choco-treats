@@ -18,8 +18,20 @@ from .config import (
 from .download import download_batch, installer_path, print_failed
 from .fetch import resolve_and_download_packages, resolve_with_deps
 from .manifest import print_summary, write_csv, write_json
-from .repack import finalize_nupkg, process_nupkg_phase1
-from .term import bold, dim, err, info, ok, section, set_verbose, warn
+from .repack import build_nupkg, collect_urls
+from .term import (
+    abort,
+    bold,
+    dim,
+    err,
+    fatal,
+    info,
+    ok,
+    section,
+    set_verbose,
+    vlog,
+    warn,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -181,63 +193,69 @@ def main(argv=None) -> int:
             unique.append(n)
     nupkgs = unique
 
-    # ---- Phase 1: rewrite URLs ----
+    # ---- Collect URLs (read-only scan of all nupkgs) ----
     all_mappings = []
-    processed_nupkgs = []  # only nupkgs written this run
+    nupkg_mappings: dict[Path, list[dict]] = {}  # per-package URL maps
 
-    section("Phase 1 — Rewriting URLs")
-    with tempfile.TemporaryDirectory(prefix="chomp_p1_") as tmp:
-        for nupkg in nupkgs:
-            mappings = process_nupkg_phase1(
-                nupkg=nupkg,
-                base_url=base_url,
-                out_dir=out_dir,
-                work_dir=Path(tmp),
-                mode=mode,
-                dry_run=is_dry,
-                force=force,
-            )
-            if mappings is not None:
-                all_mappings.extend(mappings)
-                processed_nupkgs.append(out_dir / nupkg.name)
-
-    if not all_mappings:
-        print(warn("No external URLs found."))
-        return 0
-
-    # ---- Phase 2: download + finalize ----
-    if not args.skip_download and not is_dry:
-        section("Phase 2 — Downloading installers")
-        all_mappings = download_batch(
-            items=all_mappings,
-            installer_dir=installer_dir,
-            use_pwsh=args.pwsh,
-            quiet=args.quiet,
-            interactive=args.interactive,
+    section("Phase 1 — Scanning packages")
+    for nupkg in nupkgs:
+        result = collect_urls(
+            nupkg=nupkg,
+            base_url=base_url,
+            out_dir=out_dir,
+            mode=mode,
             force=force,
         )
+        if result is None:
+            continue  # already exists, skip
+        nupkg_mappings[nupkg] = result
+        all_mappings.extend(result)
 
-        section("Phase 2b — Finalizing packages")
+    if not nupkg_mappings:
+        print(warn("Nothing to do."))
+        return 0
+
+    if is_dry:
+        pass  # fall through to summary
+
+    # ---- Download installers ----
+    elif not args.skip_download:
+        section("Phase 2 — Downloading installers")
+        try:
+            all_mappings = download_batch(
+                items=all_mappings,
+                installer_dir=installer_dir,
+                use_pwsh=args.pwsh,
+                quiet=args.quiet,
+                interactive=args.interactive,
+                force=force,
+            )
+        except KeyboardInterrupt:
+            abort()
+            done = sum(1 for m in all_mappings if m.get("downloaded") == "ok")
+            print(warn(f"  {done} installer(s) downloaded before interrupt"))
+            raise
+
+        # ---- Build final nupkgs ----
+        section("Phase 3 — Building packages")
 
         def resolve(m):
             return installer_path(m, installer_dir)
 
-        with tempfile.TemporaryDirectory(prefix="chomp_p2_") as tmp2:
-            for nupkg in processed_nupkgs:
-                if not nupkg.exists():
-                    continue
-                pkg_id = nupkg.stem.split(".")[0]
-                pkg_maps = [m for m in all_mappings if m["package"] == pkg_id]
-                if not pkg_maps:
-                    continue
-                finalize_nupkg(
-                    nupkg=nupkg,
-                    mappings=pkg_maps,
-                    local_file_resolver=resolve,
-                    out_dir=out_dir,
-                    work_dir=Path(tmp2),
-                    mode=mode,
-                )
+        with tempfile.TemporaryDirectory(prefix="chomp_") as tmp:
+            try:
+                for nupkg, mappings in nupkg_mappings.items():
+                    build_nupkg(
+                        nupkg=nupkg,
+                        mappings=mappings,
+                        local_file_resolver=resolve,
+                        out_dir=out_dir,
+                        work_dir=Path(tmp),
+                        mode=mode,
+                    )
+            except KeyboardInterrupt:
+                abort()
+                raise
 
     # ---- Output ----
     if not is_dry:
@@ -257,4 +275,28 @@ def main(argv=None) -> int:
 
 
 def entry_point():
-    sys.exit(main())
+    import os
+    import traceback
+
+    _show_tb = (
+        os.environ.get("CHOMP_TRACEBACK") or "--verbose" in sys.argv or "-v" in sys.argv
+    )
+
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        abort()
+        sys.exit(130)
+    except Exception as exc:
+        if _show_tb:
+            traceback.print_exc()
+        else:
+            # Walk cause chain for a useful one-liner
+            msg = str(exc).strip() or type(exc).__name__
+            cause = exc.__cause__ or exc.__context__
+            if cause and str(cause).strip():
+                msg = f"{msg}: {str(cause).strip()}"
+            fatal(
+                msg, hint="re-run with -v for full traceback, or set CHOMP_TRACEBACK=1"
+            )
+        sys.exit(1)

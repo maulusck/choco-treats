@@ -8,11 +8,11 @@ from .fetch import (
     resolve_with_deps,
 )
 from .manifest import print_summary, write_csv, write_json
-from .repack import finalize_nupkg, process_nupkg_phase1
+from .repack import build_nupkg, collect_urls
 
 __all__ = [
-    "process_nupkg_phase1",
-    "finalize_nupkg",
+    "collect_urls",
+    "build_nupkg",
     "download_batch",
     "installer_path",
     "resolve_package",

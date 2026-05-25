@@ -143,12 +143,19 @@ def _extract(nupkg: Path, dest: Path) -> None:
 
 
 def _repack(source_dir: Path, dest_nupkg: Path) -> None:
+    """Atomically repack source_dir into dest_nupkg via a .tmp sibling."""
     dest_nupkg.parent.mkdir(parents=True, exist_ok=True)
-    dest_nupkg.unlink(missing_ok=True)
-    with zipfile.ZipFile(dest_nupkg, "w", compression=zipfile.ZIP_DEFLATED) as z:
-        for f in source_dir.rglob("*"):
-            if f.is_file():
-                z.write(f, f.relative_to(source_dir))
+    tmp = dest_nupkg.with_suffix(".nupkg.tmp")
+    tmp.unlink(missing_ok=True)
+    try:
+        with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED) as z:
+            for f in source_dir.rglob("*"):
+                if f.is_file():
+                    z.write(f, f.relative_to(source_dir))
+        tmp.replace(dest_nupkg)  # atomic on same filesystem
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
     vlog(f"Repacked → {dest_nupkg}")
 
 
@@ -159,11 +166,10 @@ def _rewrite_ps1(
     ps1: Path, pkg_name: str, pkg_version: str, mode: str, base_url: str = None
 ) -> list[dict]:
     text = ps1.read_text(encoding="utf-8", errors="replace")
-    original = text
     mappings = []
     sub = f"{pkg_name}/{pkg_version}" if pkg_version else pkg_name
 
-    for match in URL_RE.finditer(original):
+    for match in URL_RE.finditer(text):
         old_url = match.group()
         filename = _filename_from_url(old_url)
         new_url = (
@@ -171,28 +177,28 @@ def _rewrite_ps1(
             if mode == "internalize"
             else f"{base_url.rstrip('/')}/{sub}/{filename}"
         )
-        if old_url == new_url:
-            continue
-        mappings.append(
-            {
-                "package": pkg_name,
-                "version": pkg_version,
-                "ps1": ps1.name,
-                "old_url": old_url,
-                "new_url": new_url,
-                "filename": filename,
-                "mode": mode,
-                "checksum_patched": False,
-                "new_checksum": None,
-            }
-        )
+        if old_url != new_url:
+            mappings.append(
+                {
+                    "package": pkg_name,
+                    "version": pkg_version,
+                    "ps1": ps1.name,
+                    "old_url": old_url,
+                    "new_url": new_url,
+                    "filename": filename,
+                    "mode": mode,
+                    "checksum_patched": False,
+                    "new_checksum": None,
+                }
+            )
 
     if mappings:
+        new_text = text
         for m in mappings:
-            text = text.replace(m["old_url"], m["new_url"])
-    if text != original:
-        ps1.write_text(text, encoding="utf-8")
-        vlog(f"Rewrote {len(mappings)} URL(s) in {ps1.name} [{mode}]")
+            new_text = new_text.replace(m["old_url"], m["new_url"])
+        if new_text != text:
+            ps1.write_text(new_text, encoding="utf-8")
+            vlog(f"Rewrote {len(mappings)} URL(s) in {ps1.name} [{mode}]")
     return mappings
 
 
@@ -246,40 +252,58 @@ def _patch_checksums_ps1(ps1: Path, mappings: list[dict], local_file_resolver) -
 # ── High-level pipelines ──────────────────────────────────────────────────────
 
 
-def process_nupkg_phase1(
+def collect_urls(
     nupkg: Path,
     base_url: str | None,
     out_dir: Path,
-    work_dir: Path,
     mode: str,
-    dry_run: bool = False,
     force: bool = False,
 ) -> list[dict] | None:
     """
-    Phase 1: extract → rewrite URLs in .ps1 → repack to out_dir.
+    Scan a nupkg's .ps1 scripts and return URL mappings (no disk writes).
 
-    Returns URL mappings, or None if the output already exists and force=False.
+    Returns None if out_dir/<nupkg.name> already exists and force=False.
     """
-    dest = out_dir / nupkg.name
-    if dest.exists() and not force and not dry_run:
-        vlog(f"  skip phase1 (exists): {dest.name}")
+    if (out_dir / nupkg.name).exists() and not force:
+        vlog(f"  skip (exists): {nupkg.name}")
         return None
 
     pkg_name, pkg_version = _pkg_id_version(nupkg)
-    extract_dir = work_dir / nupkg.stem
-    _extract(nupkg, extract_dir)
+    sub = f"{pkg_name}/{pkg_version}" if pkg_version else pkg_name
+    mappings = []
 
-    all_mappings = []
-    for ps1 in extract_dir.rglob("*.ps1"):
-        all_mappings.extend(_rewrite_ps1(ps1, pkg_name, pkg_version, mode, base_url))
+    with zipfile.ZipFile(nupkg) as z:
+        for entry in z.namelist():
+            if not entry.endswith(".ps1"):
+                continue
+            text = z.read(entry).decode("utf-8", errors="replace")
+            ps1_name = Path(entry).name
+            for match in URL_RE.finditer(text):
+                old_url = match.group()
+                filename = _filename_from_url(old_url)
+                new_url = (
+                    _INTERNALIZE_REF.format(filename=filename)
+                    if mode == "internalize"
+                    else f"{base_url.rstrip('/')}/{sub}/{filename}"
+                )
+                if old_url != new_url:
+                    mappings.append(
+                        {
+                            "package": pkg_name,
+                            "version": pkg_version,
+                            "ps1": ps1_name,
+                            "old_url": old_url,
+                            "new_url": new_url,
+                            "filename": filename,
+                            "mode": mode,
+                            "checksum_patched": False,
+                            "new_checksum": None,
+                        }
+                    )
+    return mappings
 
-    if not dry_run:
-        _repack(extract_dir, dest)
-    shutil.rmtree(extract_dir, ignore_errors=True)
-    return all_mappings
 
-
-def finalize_nupkg(
+def build_nupkg(
     nupkg: Path,
     mappings: list[dict],
     local_file_resolver,
@@ -288,31 +312,39 @@ def finalize_nupkg(
     mode: str,
 ) -> None:
     """
-    Phase 2b: extract rewritten nupkg, patch checksums,
-    optionally embed installer files (internalize), repack.
+    Extract nupkg, rewrite URLs, embed installers, patch checksums, repack to out_dir.
+
+    out_dir/<nupkg.name> is written atomically via _repack's internal .tmp rename.
+    The extract dir is always cleaned up, success or failure.
     """
+    out_dir.mkdir(parents=True, exist_ok=True)
     extract_dir = work_dir / nupkg.stem
-    _extract(nupkg, extract_dir)
-
-    for ps1 in extract_dir.rglob("*.ps1"):
-        ps1_maps = [m for m in mappings if m["ps1"] == ps1.name]
-        if not ps1_maps:
-            continue
-
-        if mode == "internalize":
-            files_dir = ps1.parent / "files"
-            files_dir.mkdir(exist_ok=True)
+    try:
+        _extract(nupkg, extract_dir)
+        for ps1 in extract_dir.rglob("*.ps1"):
+            ps1_maps = [m for m in mappings if m["ps1"] == ps1.name]
+            if not ps1_maps:
+                continue
+            # Rewrite URLs
+            text = ps1.read_text(encoding="utf-8", errors="replace")
             for m in ps1_maps:
-                src = local_file_resolver(m)
-                if src and src.exists():
-                    dst = files_dir / m["filename"]
-                    if not dst.exists():
-                        shutil.copy2(src, dst)
-                        vlog(
-                            f"  embedded {m['filename']} → {files_dir.relative_to(extract_dir)}/"
-                        )
-
-        _patch_checksums_ps1(ps1, ps1_maps, local_file_resolver)
-
-    _repack(extract_dir, out_dir / nupkg.name)
-    shutil.rmtree(extract_dir, ignore_errors=True)
+                text = text.replace(m["old_url"], m["new_url"])
+            ps1.write_text(text, encoding="utf-8")
+            # Embed installer files (internalize only)
+            if mode == "internalize":
+                files_dir = ps1.parent / "files"
+                files_dir.mkdir(exist_ok=True)
+                for m in ps1_maps:
+                    src = local_file_resolver(m)
+                    if src and src.exists():
+                        dst = files_dir / m["filename"]
+                        if not dst.exists():
+                            shutil.copy2(src, dst)
+                            vlog(
+                                f"  embedded {m['filename']} → {files_dir.relative_to(extract_dir)}/"
+                            )
+            # Patch checksums
+            _patch_checksums_ps1(ps1, ps1_maps, local_file_resolver)
+        _repack(extract_dir, out_dir / nupkg.name)
+    finally:
+        shutil.rmtree(extract_dir, ignore_errors=True)

@@ -93,7 +93,7 @@ Environment variable `CHOMP_REPO` overrides the repo root (default: `./chomp`).
 ## Repository layout (auto-created)
 
 ```
-chomp/
+chomp.out/
   nupkgs/          ← downloaded .nupkg cache
   installers/      ← staged installer binaries
   out/
@@ -141,7 +141,42 @@ manifests/
 
 ---
 
-## URL filtering
+## Error handling
+
+CHOMP distinguishes three error classes:
+
+**Per-package / per-download failures** — logged inline with `✗` and included in the summary and manifest. The run continues with remaining packages.
+
+**Fatal errors** (bad args, missing mode, unreadable directory) — printed as a clean one-liner to stderr and exit code 1:
+
+```
+error: rewrite mode requires --base-url
+```
+
+**Interrupted runs** (`Ctrl-C`) — prints a clean abort line and any partial progress before exiting with code 130:
+
+```
+interrupted (ctrl-c)
+  3 installer(s) downloaded before interrupt
+```
+
+### Tracebacks
+
+By default, tracebacks are suppressed for clean output. Enable them two ways:
+
+```bash
+# via flag (also enables verbose debug output)
+chomp internalize googlechrome -v
+
+# via environment variable (traceback only, no extra verbosity)
+CHOMP_TRACEBACK=1 chomp internalize googlechrome
+```
+
+Exit codes: `0` success, `1` error, `2` bad arguments, `130` interrupted.
+
+---
+
+
 
 CHOMP skips URLs that aren't downloadable installer paths:
 

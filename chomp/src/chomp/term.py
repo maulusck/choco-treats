@@ -190,6 +190,18 @@ class Spinner:
 # ── Layout ────────────────────────────────────────────────────────────────────
 
 
+def fatal(msg: str, hint: str = "") -> None:
+    """Print a clean fatal error line (no traceback)."""
+    print(f"\n{err('error:')} {msg}", file=sys.stderr)
+    if hint:
+        print(f"  {dim(hint)}", file=sys.stderr)
+
+
+def abort() -> None:
+    """Print a clean Ctrl-C / interrupt message."""
+    print(f"\n{warn('interrupted')} {dim('(ctrl-c)')}", file=sys.stderr)
+
+
 def section(title: str) -> None:
     bar = _c("─" * 56, "blue")
     print(f"\n{bar}\n  {_c(title, 'magenta', 'bold')}\n{bar}")
