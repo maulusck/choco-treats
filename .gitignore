@@ -1,4 +1,7 @@
+.venv/
 __pycache__/
+dist/
+chomp.out/
 .ruff_cache/
 *.egg-info
 *.exe
@@ -13,5 +16,3 @@ __pycache__/
 *.tar.gz
 *.whl
 *.zip
-build/
-dist/
