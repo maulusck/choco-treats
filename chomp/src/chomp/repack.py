@@ -72,6 +72,24 @@ _INTERNALIZE_REF = (
 )
 
 
+def _replace_url_in_text(text: str, old_url: str, new_url: str) -> str:
+    """
+    Replace old_url with new_url in .ps1 text.
+
+    If new_url contains a PowerShell subexpression ``$(...)`` and the URL
+    was wrapped in single quotes, re-quote that token with double quotes so
+    the subexpression actually expands at runtime.  Single-quoted strings in
+    PowerShell are literal — ``$()`` is never evaluated inside them.
+    """
+    if "$(" not in new_url:
+        return text.replace(old_url, new_url)
+    # Single-quoted token: 'https://...' → "$(Split-Path ...)\files\foo.exe"
+    text = text.replace(f"'{old_url}'", f'"{new_url}"')
+    # Unquoted or already double-quoted occurrences
+    text = text.replace(old_url, new_url)
+    return text
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
@@ -195,7 +213,7 @@ def _rewrite_ps1(
     if mappings:
         new_text = text
         for m in mappings:
-            new_text = new_text.replace(m["old_url"], m["new_url"])
+            new_text = _replace_url_in_text(new_text, m["old_url"], m["new_url"])
         if new_text != text:
             ps1.write_text(new_text, encoding="utf-8")
             vlog(f"Rewrote {len(mappings)} URL(s) in {ps1.name} [{mode}]")
@@ -328,7 +346,7 @@ def build_nupkg(
             # Rewrite URLs
             text = ps1.read_text(encoding="utf-8", errors="replace")
             for m in ps1_maps:
-                text = text.replace(m["old_url"], m["new_url"])
+                text = _replace_url_in_text(text, m["old_url"], m["new_url"])
             ps1.write_text(text, encoding="utf-8")
             # Embed installer files (internalize only)
             if mode == "internalize":
