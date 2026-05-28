@@ -7,8 +7,17 @@ from pathlib import Path
 from .term import bold, console, dim, err, ok, rule, warn
 
 FIELDS = [
-    "package", "version", "ps1", "mode", "old_url", "new_url", "filename",
-    "downloaded", "skip_reason", "checksum_patched", "new_checksum",
+    "package",
+    "version",
+    "ps1",
+    "mode",
+    "old_url",
+    "new_url",
+    "filename",
+    "downloaded",
+    "skip_reason",
+    "checksum_patched",
+    "new_checksum",
 ]
 
 

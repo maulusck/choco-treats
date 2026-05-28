@@ -18,11 +18,21 @@ from xml.etree import ElementTree as ET
 import requests
 
 from .config import DEFAULT_CHOCO_REPO, DEFAULT_RATE_LIMIT
-from .term import CHECK, CROSS, DL, SKIP, console, dim, err, ok, spinner
+from .term import CHECK, CROSS, DL, SKIP, console, dim, err, ok
 from .term import pkg as cpkg
-from .term import vlog, vlog_http, warn
+from .term import spinner, vlog, vlog_http, warn
 
 _USER_AGENT = "NuGet/6.0 (Microsoft Windows NT 10.0; chomp)"
+
+
+def _filename_from_response(r: "requests.Response") -> str | None:
+    """Best server-suggested filename: Content-Disposition, else final URL basename."""
+    cd = r.headers.get("Content-Disposition", "") or ""
+    m = re.search(r"filename\*?=(?:[^']*'')?\"?([^\";]+)\"?", cd)
+    if m:
+        return urllib.parse.unquote(m.group(1).strip().strip('"')) or None
+    name = Path(urllib.parse.urlparse(r.url).path).name
+    return urllib.parse.unquote(name) if name else None
 
 
 # ── Rate limiting ─────────────────────────────────────────────────────────────
@@ -81,10 +91,11 @@ class RequestsBackend:
         vlog_http("GET", url, r.status_code, len(r.content))
         return r.text
 
-    def download(self, url: str, dest: Path) -> None:
+    def download(self, url: str, dest: Path) -> str | None:
         with self._request(url, timeout=300, stream=True) as r, open(dest, "wb") as f:
             for chunk in r.iter_content(65536):
                 f.write(chunk)
+            return _filename_from_response(r)
 
 
 class PowerShellBackend:
@@ -108,7 +119,9 @@ class PowerShellBackend:
             try:
                 r = subprocess.run(
                     [exe, "-NoProfile", "-Command", "$PSVersionTable.PSVersion.Major"],
-                    capture_output=True, text=True, check=True,
+                    capture_output=True,
+                    text=True,
+                    check=True,
                 )
                 return exe, int(r.stdout.strip()) >= 7
             except (FileNotFoundError, subprocess.CalledProcessError, ValueError):
@@ -128,20 +141,19 @@ class PowerShellBackend:
         return f
 
     def _run(self, body: str) -> subprocess.CompletedProcess:
-        script = (
-            "$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'\n"
-            + body
-        )
+        script = "$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'\n" + body
         r = subprocess.run(
             [self.exe, "-NoProfile", "-NonInteractive", "-Command", script],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         vlog(f"pwsh exit={r.returncode}")
         return r
 
     def _fail(self, r) -> str:
         lines = [
-            ln.strip() for ln in (r.stdout + r.stderr).splitlines()
+            ln.strip()
+            for ln in (r.stdout + r.stderr).splitlines()
             if ln.strip() and "~~" not in ln and "|" not in ln
         ]
         return lines[-1] if lines else "PowerShell request failed"
@@ -175,8 +187,12 @@ _CHOCO_API = DEFAULT_CHOCO_REPO
 _backend = RequestsBackend(verify=True, limiter=_RateLimiter(DEFAULT_RATE_LIMIT))
 
 
-def configure(repo_url: str = None, rate: float = DEFAULT_RATE_LIMIT,
-              insecure: bool = False, use_pwsh: bool = False):
+def configure(
+    repo_url: str = None,
+    rate: float = DEFAULT_RATE_LIMIT,
+    insecure: bool = False,
+    use_pwsh: bool = False,
+):
     global _CHOCO_API, _backend
     if repo_url:
         _CHOCO_API = repo_url.rstrip("/")
@@ -192,8 +208,8 @@ def http_get(url: str) -> str:
     return _backend.get(url)
 
 
-def http_download(url: str, dest: Path) -> None:
-    _backend.download(url, dest)
+def http_download(url: str, dest: Path) -> str | None:
+    return _backend.download(url, dest)
 
 
 # ── NuGet v2 OData ────────────────────────────────────────────────────────────
@@ -254,8 +270,8 @@ def _parse_deps(dep_str: str) -> list[str]:
         if not dep_id or not re.match(r"^[A-Za-z]", dep_id):
             continue
         ver = segments[1].strip() if len(segments) > 1 else ""
-        ver = re.sub(r"^[\[(]", "", ver)          # drop leading [ or (
-        ver = re.sub(r"[\])].*$", "", ver)        # drop from ] or ) onward
+        ver = re.sub(r"^[\[(]", "", ver)  # drop leading [ or (
+        ver = re.sub(r"[\])].*$", "", ver)  # drop from ] or ) onward
         ver = re.sub(r"^[<>=!\s]+", "", ver.split(",")[0]).strip()
         specs.append(f"{dep_id}@{ver}" if ver else dep_id)
     return specs

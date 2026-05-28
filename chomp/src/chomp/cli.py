@@ -43,7 +43,9 @@ def build_parser() -> argparse.ArgumentParser:
         description="Chocolatey Handler for Offline Package Mirroring & Processing.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("mode", choices=["internalize", "rewrite", "seal", "repack"], help=CLI_HELP["mode"])
+    p.add_argument(
+        "mode", choices=["internalize", "rewrite", "seal", "repack"], help=CLI_HELP["mode"]
+    )
     p.add_argument("packages", nargs="*", metavar="PACKAGE[@VERSION]", help=CLI_HELP["packages"])
 
     p.add_argument("-p", "--packages-dir", type=Path, metavar="DIR", help=CLI_HELP["packages_dir"])
@@ -56,8 +58,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-s", "--source", metavar="URL", help=CLI_HELP["source"])
     p.add_argument("-k", "--insecure", action="store_true", help=CLI_HELP["insecure"])
     p.add_argument("--pwsh", action="store_true", help=CLI_HELP["pwsh"])
-    p.add_argument("--rate-limit", type=float, default=DEFAULT_RATE_LIMIT,
-                   metavar="RPS", help=CLI_HELP["rate_limit"])
+    p.add_argument(
+        "--rate-limit",
+        type=float,
+        default=DEFAULT_RATE_LIMIT,
+        metavar="RPS",
+        help=CLI_HELP["rate_limit"],
+    )
 
     p.add_argument("--skip-download", action="store_true", help=CLI_HELP["skip_download"])
     p.add_argument("--interactive", action="store_true", help=CLI_HELP["interactive"])
@@ -93,8 +100,9 @@ def main(argv=None) -> int:
         err_console.print(err("rewrite mode requires --base-url"))
         return 2
 
-    configure_fetch(repo_url=args.source, rate=args.rate_limit,
-                    insecure=args.insecure, use_pwsh=args.pwsh)
+    configure_fetch(
+        repo_url=args.source, rate=args.rate_limit, insecure=args.insecure, use_pwsh=args.pwsh
+    )
 
     base_url = (args.base_url or "").rstrip("/") if mode == "rewrite" else None
     repo_root = get_repo_root()
@@ -102,7 +110,9 @@ def main(argv=None) -> int:
     # ---- Paths ----
     pkg_dir = args.packages_dir.resolve() if args.packages_dir else repo_path(repo_root, "nupkgs")
     pkg_dir = pkg_dir if pkg_dir.exists() else None
-    installer_dir = args.installers.resolve() if args.installers else repo_path(repo_root, "installers")
+    installer_dir = (
+        args.installers.resolve() if args.installers else repo_path(repo_root, "installers")
+    )
     fetch_dir = args.fetch_dir.resolve() if args.fetch_dir else repo_path(repo_root, "nupkgs")
     out_dir = args.out_dir.resolve() if args.out_dir else get_out_dir(repo_root, mode)
     if args.in_place and pkg_dir:
@@ -116,13 +126,15 @@ def main(argv=None) -> int:
         fetch_dir.mkdir(parents=True, exist_ok=True)
 
     # ---- Header ----
-    tags = "".join([
-        warn(" [DRY RUN]") if is_dry else "",
-        warn(" [--force]") if force else "",
-        warn(" [insecure]") if args.insecure else "",
-        info(" [--pwsh]") if args.pwsh else "",
-        info(" [--verbose]") if args.verbose else "",
-    ])
+    tags = "".join(
+        [
+            warn(" [DRY RUN]") if is_dry else "",
+            warn(" [--force]") if force else "",
+            warn(" [insecure]") if args.insecure else "",
+            info(" [--pwsh]") if args.pwsh else "",
+            info(" [--verbose]") if args.verbose else "",
+        ]
+    )
     mode_display = f"{mode} ({args.mode})" if args.mode != mode else mode
     console.print(f"\n{bold('chomp')} {dim(mode_display)}{tags}")
     console.print(dim(f"  repo root : {repo_root}"))
@@ -141,10 +153,15 @@ def main(argv=None) -> int:
         section("Fetching packages")
         if not is_dry:
             fetch_dir.mkdir(parents=True, exist_ok=True)
-            nupkgs.extend(resolve_and_download_packages(
-                args.packages, dest_dir=fetch_dir, quiet=args.quiet,
-                force=force, include_deps=args.deps,
-            ))
+            nupkgs.extend(
+                resolve_and_download_packages(
+                    args.packages,
+                    dest_dir=fetch_dir,
+                    quiet=args.quiet,
+                    force=force,
+                    include_deps=args.deps,
+                )
+            )
     if args.packages_dir and pkg_dir:
         nupkgs.extend(sorted(pkg_dir.glob("*.nupkg")))
 
@@ -165,7 +182,9 @@ def main(argv=None) -> int:
     nupkg_mappings: dict[Path, list[dict]] = {}
     section("Phase 1 — Scanning packages")
     for nupkg in nupkgs:
-        result = collect_urls(nupkg=nupkg, base_url=base_url, out_dir=out_dir, mode=mode, force=force)
+        result = collect_urls(
+            nupkg=nupkg, base_url=base_url, out_dir=out_dir, mode=mode, force=force
+        )
         if result is None:
             continue
         nupkg_mappings[nupkg] = result
@@ -180,8 +199,11 @@ def main(argv=None) -> int:
         section("Phase 2 — Downloading installers")
         try:
             all_mappings = download_batch(
-                items=all_mappings, installer_dir=installer_dir,
-                quiet=args.quiet, interactive=args.interactive, force=force,
+                items=all_mappings,
+                installer_dir=installer_dir,
+                quiet=args.quiet,
+                interactive=args.interactive,
+                force=force,
             )
         except KeyboardInterrupt:
             abort()
@@ -197,8 +219,23 @@ def main(argv=None) -> int:
         with tempfile.TemporaryDirectory(prefix="chomp_") as tmp:
             try:
                 for nupkg, mappings in nupkg_mappings.items():
-                    build_nupkg(nupkg=nupkg, mappings=mappings, local_file_resolver=resolve,
-                                out_dir=out_dir, work_dir=Path(tmp), mode=mode)
+                    failed = [m for m in mappings if m.get("downloaded") == "failed"]
+                    if failed:
+                        console.print(
+                            warn(
+                                f"  ✗ incomplete — not written: {nupkg.name} "
+                                f"({len(failed)} failed download(s))"
+                            )
+                        )
+                        continue
+                    build_nupkg(
+                        nupkg=nupkg,
+                        mappings=mappings,
+                        local_file_resolver=resolve,
+                        out_dir=out_dir,
+                        work_dir=Path(tmp),
+                        mode=mode,
+                    )
             except KeyboardInterrupt:
                 abort()
                 raise

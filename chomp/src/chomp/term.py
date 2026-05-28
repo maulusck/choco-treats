@@ -25,8 +25,7 @@ except ImportError:  # rich is optional — fall back to plain text.
 
     console, err_console = _Plain(sys.stdout), _Plain(sys.stderr)
     sys.stderr.write(
-        "warning: 'rich' not installed — using plain output. "
-        "Install with: pip install rich\n"
+        "warning: 'rich' not installed — using plain output. " "Install with: pip install rich\n"
     )
 
 _VERBOSE = False
@@ -37,15 +36,40 @@ def _w(t, style):
     return f"[{style}]{_esc(str(t))}[/{style}]" if _RICH else str(t)
 
 
-def ok(t):        return _w(t, "green")
-def warn(t):      return _w(t, "yellow")
-def err(t):       return _w(t, "red")
-def info(t):      return _w(t, "cyan")
-def dim(t):       return _w(t, "dim")
-def bold(t):      return _w(t, "bold")
-def pkg(t):       return _w(t, "bold blue")
-def url_old(t):   return _w(t, "yellow")
-def url_new(t):   return _w(t, "cyan")
+def ok(t):
+    return _w(t, "green")
+
+
+def warn(t):
+    return _w(t, "yellow")
+
+
+def err(t):
+    return _w(t, "red")
+
+
+def info(t):
+    return _w(t, "cyan")
+
+
+def dim(t):
+    return _w(t, "dim")
+
+
+def bold(t):
+    return _w(t, "bold")
+
+
+def pkg(t):
+    return _w(t, "bold blue")
+
+
+def url_old(t):
+    return _w(t, "yellow")
+
+
+def url_new(t):
+    return _w(t, "cyan")
 
 
 # ── Symbols ───────────────────────────────────────────────────────────────────

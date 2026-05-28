@@ -3,6 +3,7 @@ __pycache__/
 dist/
 chomp.out/
 .ruff_cache/
+.DS_Store
 *.egg-info
 *.exe
 *.log

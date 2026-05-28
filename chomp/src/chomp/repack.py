@@ -20,7 +20,7 @@ import re
 import shutil
 import zipfile
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 from xml.etree import ElementTree as ET
 
 from .term import vlog
@@ -43,9 +43,27 @@ _SKIP_PATTERNS = [
 ]
 
 _INSTALLER_EXTS = {
-    ".exe", ".msi", ".msu", ".msp", ".msix", ".appx", ".zip", ".7z", ".tar",
-    ".gz", ".bz2", ".xz", ".cab", ".iso", ".img", ".dmg", ".nupkg", ".vsix",
-    ".jar", ".ps1", ".psm1",
+    ".exe",
+    ".msi",
+    ".msu",
+    ".msp",
+    ".msix",
+    ".appx",
+    ".zip",
+    ".7z",
+    ".tar",
+    ".gz",
+    ".bz2",
+    ".xz",
+    ".cab",
+    ".iso",
+    ".img",
+    ".dmg",
+    ".nupkg",
+    ".vsix",
+    ".jar",
+    ".ps1",
+    ".psm1",
 }
 
 _INTERNALIZE_REF = r"$(Split-Path -parent $MyInvocation.MyCommand.Definition)\files\{filename}"
@@ -55,7 +73,19 @@ _INTERNALIZE_REF = r"$(Split-Path -parent $MyInvocation.MyCommand.Definition)\fi
 
 
 def _filename_from_url(url: str) -> str:
-    return Path(urlparse(url).path).name or "installer.bin"
+    return unquote(Path(urlparse(url).path).name) or "installer.bin"
+
+
+def _swap_basename(ref: str, filename: str) -> str:
+    """Replace the trailing path segment of a replacement reference."""
+    i = max(ref.rfind("/"), ref.rfind("\\"))
+    return ref[: i + 1] + filename if i >= 0 else filename
+
+
+def apply_filename(m: dict, filename: str) -> None:
+    """Update a mapping's filename and keep its replacement reference in sync."""
+    m["filename"] = filename
+    m["new_url"] = _swap_basename(m["new_url"], filename)
 
 
 def _new_ref(filename: str, mode: str, base_url: str | None, sub: str) -> str:
