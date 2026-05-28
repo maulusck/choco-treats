@@ -1,23 +1,29 @@
 # CHOMP
 
-**Chocolatey Handler for Offline Package Mirroring & Processing**
+**Chocolatey Handler for Offline [package] Mirroring & Processing**
 
 Internalize or rewrite Chocolatey `.nupkg` packages for air-gapped deployments.
-Mirrors `choco download --internalize` without requiring the Chocolatey CLI or any third-party Python dependencies.
+Mirrors `choco download --internalize` without requiring the Chocolatey CLI.
 
 ```bash
-pip install chomp
+pip install chomp          # core (uses requests)
+pip install chomp[color]   # + rich colored output (optional)
 ```
 
-Requires Python 3.11+.
+Requires Python 3.11+. Depends on `requests`; `rich` is optional — without it,
+output falls back to monochrome and a one-line install hint is printed.
 
 ---
 
 ## Modes
 
+The two modes share one pipeline (scan → download → build) and differ only in
+how the installer reference is written and whether the installer is embedded.
+
 ### `internalize` (alias: `seal`)
 
-Embeds installer binaries **inside** the `.nupkg` under `tools/files/`. Scripts reference them locally:
+Embeds installer binaries **inside** the `.nupkg` under `tools/files/`. Scripts
+reference them locally:
 
 ```powershell
 $(Split-Path -parent $MyInvocation.MyCommand.Definition)\files\setup.exe
@@ -27,7 +33,12 @@ Result: a fully self-contained `.nupkg` for offline NuGet feeds.
 
 ### `rewrite` (alias: `repack`)
 
-Rewrites installer URLs in `.ps1` scripts to point at an internal server. Installers are staged separately under `installers/<package>/<version>/`. Requires `--base-url`.
+Rewrites installer URLs in `.ps1` scripts to point at an internal server.
+Installers are staged separately under `installers/<package>/<version>/`.
+Requires `--base-url`.
+
+In both modes, embedded `-Checksum` values are re-patched to the SHA-256 of the
+downloaded file.
 
 ---
 
@@ -46,21 +57,33 @@ chomp internalize --packages-dir ./pkgs
 # Rewrite mode with internal repo
 chomp rewrite --base-url http://repo.local/packages googlechrome
 
-# Force re-download and overwrite existing .nupkg and installers
+# Resolve transitive dependencies
+chomp internalize firefox --deps
+
+# Use a different NuGet v2 source
+chomp internalize 7zip --source https://my.feed/api/v2
+
+# Throttle / disable API rate limiting (avoids HTTP 429)
+chomp internalize 7zip --rate-limit 5      # 5 req/sec
+chomp internalize 7zip --rate-limit 0      # unlimited
+
+# Skip TLS verification (e.g. internal MITM proxy)
+chomp internalize 7zip --insecure
+
+# Route HTTP through system PowerShell (NTLM/Kerberos corporate proxies)
+chomp internalize 7zip --pwsh
+
+# Force, interactive, dry run, verbose
 chomp internalize googlechrome --force
-
-# Use PowerShell HTTP backend (corporate proxy environments)
-chomp internalize googlechrome --pwsh
-
-# Interactive URL confirmation before downloads
 chomp internalize --packages-dir ./pkgs --interactive
-
-# Dry run — show what would happen, write nothing
 chomp internalize googlechrome --dry-run
-
-# Verbose debug output
 chomp internalize googlechrome --verbose
 ```
+
+> Corporate proxies: `requests` honours the standard `HTTP_PROXY` /
+> `HTTPS_PROXY` / `NO_PROXY` environment variables automatically. For proxies
+> that require OS-integrated auth (NTLM/Kerberos), use `--pwsh`, which delegates
+> HTTP to a system PowerShell (`pwsh` or `powershell`).
 
 ---
 
@@ -71,22 +94,26 @@ chomp internalize googlechrome --verbose
 | `mode`                | `internalize` / `seal` or `rewrite` / `repack` (required)              |
 | `PACKAGE[@VER]`       | Packages to fetch from Chocolatey                                      |
 | `-p / --packages-dir` | Local `.nupkg` directory to process                                    |
-| `-o / --out-dir`      | Output directory (default: `chomp/out/<mode>/`)                        |
-| `-i / --installers`   | Installer staging directory (default: `chomp/installers/`)             |
-| `--fetch-dir`         | Cache for downloaded `.nupkg` files (default: `chomp/nupkgs/`)         |
+| `-o / --out-dir`      | Output directory (default: `$CHOMP_REPO/out/<mode>/`)                  |
+| `-i / --installers`   | Installer staging directory (default: `$CHOMP_REPO/installers/`)       |
+| `--fetch-dir`         | Cache for downloaded `.nupkg` files (default: `$CHOMP_REPO/nupkgs/`)   |
 | `--in-place`          | Write output back into `--packages-dir`                                |
 | `-u / --base-url`     | Internal package base URL (required for `rewrite`)                     |
-| `--pwsh`              | Use PowerShell (`Invoke-WebRequest`) for HTTP                          |
+| `-s / --source`       | Chocolatey NuGet v2 repo URL (default: community feed)                 |
+| `-k / --insecure`     | Skip TLS certificate verification                                      |
+| `--pwsh`              | Use a system PowerShell backend for HTTP (aggressive corporate proxies) |
+| `--rate-limit RPS`    | Max API requests/sec; `0` disables limiting (default: `10`)            |
+| `--deps`              | Resolve and process transitive dependencies                           |
 | `--skip-download`     | Rewrite scripts only; skip installer downloads                         |
 | `--interactive`       | Confirm each URL before downloading                                    |
 | `--force`             | Re-download and overwrite existing `.nupkg` and installer files        |
-| `--manifest`          | CSV audit log path (default: `chomp/manifests/<mode>_<timestamp>.csv`) |
+| `--manifest`          | CSV audit log path (default: `$CHOMP_REPO/manifests/<mode>_<ts>.csv`)  |
 | `--manifest-json`     | Also write a JSON audit log to this path                               |
 | `--dry-run`           | Print actions without writing any files                                |
 | `-q / --quiet`        | Suppress progress output                                               |
 | `-v / --verbose`      | Print debug information                                                |
 
-Environment variable `CHOMP_REPO` overrides the repo root (default: `./chomp`).
+Environment variable `CHOMP_REPO` overrides the repo root (default: `./chomp.out`).
 
 ---
 
@@ -104,136 +131,54 @@ chomp.out/
 
 ---
 
-## Output structure
-
-**internalize:**
-
-```
-out/internalized/
-  googlechrome.126.0.nupkg   ← self-contained; installers embedded inside
-installers/
-  googlechrome/126.0/
-    googlechromestandaloneenterprise64.msi
-manifests/
-  internalize_20260521_120000.csv
-```
-
-Inside the `.nupkg`, `tools/` looks like:
-
-```
-tools/
-  chocolateyInstall.ps1      ← URLs replaced with local \files\ references
-  files/
-    googlechromestandaloneenterprise64.msi
-```
-
-**rewrite:**
-
-```
-out/rewritten/
-  googlechrome.126.0.nupkg   ← URLs rewritten to internal server
-installers/
-  googlechrome/126.0/
-    googlechromestandaloneenterprise64.msi
-manifests/
-  rewrite_20260521_120000.csv
-```
-
----
-
 ## Error handling
 
-CHOMP distinguishes three error classes:
+- **Per-package / per-download failures** — logged inline with `✗`, included in
+  the summary and manifest; the run continues.
+- **HTTP 429** — automatically retried with exponential backoff; tune throughput
+  with `--rate-limit`.
+- **Fatal errors** (bad args, missing mode) — clean one-liner to stderr, exit 1.
+- **Interrupts** (`Ctrl-C`) — clean abort line plus partial progress, exit 130.
 
-**Per-package / per-download failures** — logged inline with `✗` and included in the summary and manifest. The run continues with remaining packages.
-
-**Fatal errors** (bad args, missing mode, unreadable directory) — printed as a clean one-liner to stderr and exit code 1:
-
-```
-error: rewrite mode requires --base-url
-```
-
-**Interrupted runs** (`Ctrl-C`) — prints a clean abort line and any partial progress before exiting with code 130:
-
-```
-interrupted (ctrl-c)
-  3 installer(s) downloaded before interrupt
-```
-
-### Tracebacks
-
-By default, tracebacks are suppressed for clean output. Enable them two ways:
-
-```bash
-# via flag (also enables verbose debug output)
-chomp internalize googlechrome -v
-
-# via environment variable (traceback only, no extra verbosity)
-CHOMP_TRACEBACK=1 chomp internalize googlechrome
-```
-
+Tracebacks are suppressed by default; enable with `-v` or `CHOMP_TRACEBACK=1`.
 Exit codes: `0` success, `1` error, `2` bad arguments, `130` interrupted.
 
----
-
-
-
-CHOMP skips URLs that aren't downloadable installer paths:
-
-- PowerShell variable references (`$var`)
-- Template placeholders (`<tag>`, `{...}`)
-- Truncated or malformed URLs
-- URLs without a recognisable installer extension
-- Missing or localhost hostnames
-
-Use `--interactive` to manually approve or edit each URL before download.
+URLs that aren't downloadable installer paths are skipped (PowerShell variables,
+template placeholders, truncated URLs, unknown extensions, missing/localhost
+hosts). Use `--interactive` to approve or edit each URL.
 
 ---
 
 ## Python API
 
 ```python
-from chomp import (
-    resolve_and_download_packages,
-    process_nupkg_phase1,
-    download_batch,
-    installer_path,
-    finalize_nupkg,
-    write_csv,
-)
-from pathlib import Path
 import tempfile
+from pathlib import Path
+from chomp import (
+    configure, resolve_and_download_packages, collect_urls,
+    download_batch, installer_path, build_nupkg, write_csv,
+)
+
+configure(rate=10)                       # optional: source/rate/insecure
+out_dir = Path("out/internalized")
+installer_dir = Path("installers")
 
 nupkgs = resolve_and_download_packages(["googlechrome", "7zip@24.9"], Path("nupkgs"))
 
-all_mappings = []
-out_dir = Path("out/internalized")
+# Phase 1 — scan (returns None if already built and force=False)
+per_pkg = {n: m for n in nupkgs
+           if (m := collect_urls(n, base_url=None, out_dir=out_dir,
+                                 mode="internalize", force=False)) is not None}
+all_maps = [m for maps in per_pkg.values() for m in maps]
 
+# Phase 2 — download installers
+all_maps = download_batch(all_maps, installer_dir)
+
+# Phase 3 — build
+resolve = lambda m: installer_path(m, installer_dir)
 with tempfile.TemporaryDirectory() as tmp:
-    for nupkg in nupkgs:
-        mappings = process_nupkg_phase1(
-            nupkg=nupkg,
-            base_url=None,
-            out_dir=out_dir,
-            work_dir=Path(tmp),
-            mode="internalize",
-        )
-        if mappings:
-            all_mappings.extend(mappings)
+    for nupkg, maps in per_pkg.items():
+        build_nupkg(nupkg, maps, resolve, out_dir, Path(tmp), "internalize")
 
-installer_dir = Path("installers")
-all_mappings = download_batch(all_mappings, installer_dir)
-
-def resolve(m): return installer_path(m, installer_dir)
-
-with tempfile.TemporaryDirectory() as tmp2:
-    for nupkg in out_dir.glob("*.nupkg"):
-        pkg_id   = nupkg.stem.split(".")[0]
-        pkg_maps = [m for m in all_mappings if m["package"] == pkg_id]
-        if pkg_maps:
-            finalize_nupkg(nupkg, pkg_maps, resolve, out_dir, Path(tmp2), "internalize")
-
-write_csv(all_mappings, Path("manifests/audit.csv"))
+write_csv(all_maps, Path("manifests/audit.csv"))
 ```
-
-> **Note:** `process_nupkg_phase1` returns `None` if the output `.nupkg` already exists and `force=False`. Check for `None` before extending `all_mappings`.

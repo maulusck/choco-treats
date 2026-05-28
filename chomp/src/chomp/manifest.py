@@ -4,20 +4,11 @@ import csv
 import json
 from pathlib import Path
 
-from .term import CHECK, bold, dim, err, ok, rule, warn
+from .term import bold, console, dim, err, ok, rule, warn
 
 FIELDS = [
-    "package",
-    "version",
-    "ps1",
-    "mode",
-    "old_url",
-    "new_url",
-    "filename",
-    "downloaded",
-    "skip_reason",
-    "checksum_patched",
-    "new_checksum",
+    "package", "version", "ps1", "mode", "old_url", "new_url", "filename",
+    "downloaded", "skip_reason", "checksum_patched", "new_checksum",
 ]
 
 
@@ -34,32 +25,25 @@ def write_json(mappings: list[dict], path: Path) -> None:
     path.write_text(json.dumps(mappings, indent=2, default=str), encoding="utf-8")
 
 
+def _count(mappings, status):
+    return sum(1 for m in mappings if m.get("downloaded") == status)
+
+
 def print_summary(mappings: list[dict]) -> None:
     counts = {
         "URLs found": len(mappings),
-        "Downloaded": sum(1 for m in mappings if m.get("downloaded") == "ok"),
-        "Already exist": sum(
-            1 for m in mappings if m.get("downloaded") == "skipped-exists"
-        ),
-        "Duplicates skipped": sum(
-            1 for m in mappings if m.get("downloaded") == "skipped-duplicate"
-        ),
-        "Filtered (no-file)": sum(
-            1 for m in mappings if m.get("downloaded") == "skipped-filtered"
-        ),
-        "Failed": sum(1 for m in mappings if m.get("downloaded") == "failed"),
+        "Downloaded": _count(mappings, "ok"),
+        "Already exist": _count(mappings, "skipped-exists"),
+        "Duplicates skipped": _count(mappings, "skipped-duplicate"),
+        "Filtered (no-file)": _count(mappings, "skipped-filtered"),
+        "Failed": _count(mappings, "failed"),
         "Checksums patched": sum(1 for m in mappings if m.get("checksum_patched")),
     }
-    colors = {
-        "Downloaded": ok,
-        "Filtered (no-file)": warn,
-        "Failed": err,
-        "Checksums patched": ok,
-    }
+    colors = {"Downloaded": ok, "Filtered (no-file)": warn, "Failed": err, "Checksums patched": ok}
     bar = rule()
-    print(f"\n{bar}\n  {bold('Summary')}\n{bar}")
+    console.print(f"\n{bar}\n  {bold('Summary')}\n{bar}")
     for label, value in counts.items():
         color = colors.get(label)
-        val_str = color(str(value)) if color and value else dim(str(value))
-        print(f"  {dim(f'{label:<26}')} {val_str}")
-    print(bar)
+        val = color(str(value)) if color and value else dim(str(value))
+        console.print(f"  {dim(f'{label:<26}')} {val}")
+    console.print(bar)

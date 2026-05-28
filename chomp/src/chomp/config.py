@@ -1,9 +1,12 @@
-"""chomp.config — Single source of truth for paths, modes, and CLI help."""
+"""chomp.config — Single source of truth for paths, modes, defaults, CLI help."""
 
 import os
-from dataclasses import asdict, dataclass, fields
+from dataclasses import dataclass, fields
 from datetime import datetime
 from pathlib import Path
+
+DEFAULT_CHOCO_REPO = "https://community.chocolatey.org/api/v2"
+DEFAULT_RATE_LIMIT = 10  # API requests/sec; 0 disables limiting
 
 # ── Repo layout ───────────────────────────────────────────────────────────────
 
@@ -18,13 +21,7 @@ class RepoLayout:
 
 
 REPO_LAYOUT = RepoLayout()
-
-# Map canonical mode names to the RepoLayout field that holds their out path.
-_MODE_OUT_FIELD = {
-    "internalize": "out_internalized",
-    "rewrite": "out_rewritten",
-}
-
+_MODE_OUT_FIELD = {"internalize": "out_internalized", "rewrite": "out_rewritten"}
 
 # ── Mode system ───────────────────────────────────────────────────────────────
 
@@ -51,13 +48,11 @@ def get_repo_root() -> Path:
 
 
 def repo_path(root: Path, key: str) -> Path:
-    """Resolve a RepoLayout field name to an absolute path under root."""
     return root / getattr(REPO_LAYOUT, key)
 
 
 def get_out_dir(root: Path, mode: str) -> Path:
-    field = _MODE_OUT_FIELD[validate_mode(mode)]
-    return repo_path(root, field)
+    return repo_path(root, _MODE_OUT_FIELD[validate_mode(mode)])
 
 
 def get_manifest_path(root: Path, mode: str) -> Path:
@@ -65,11 +60,7 @@ def get_manifest_path(root: Path, mode: str) -> Path:
     return repo_path(root, "manifests") / f"{validate_mode(mode)}_{ts}.csv"
 
 
-# ── Repo structure ────────────────────────────────────────────────────────────
-
-
 def ensure_repo_structure(root: Path) -> None:
-    """Create the full repo skeleton from REPO_LAYOUT — no hardcoded paths."""
     for f in fields(REPO_LAYOUT):
         (root / getattr(REPO_LAYOUT, f.name)).mkdir(parents=True, exist_ok=True)
 
@@ -85,7 +76,10 @@ CLI_HELP = {
     "fetch_dir": f"Cache directory for downloaded .nupkg files (default: $CHOMP_REPO/{REPO_LAYOUT.nupkgs}/).",
     "in_place": "Write output back into --packages-dir instead of out/.",
     "base_url": "[rewrite] Internal server base URL (e.g. http://repo.local/packages).",
-    "pwsh": "Use PowerShell (Invoke-WebRequest) for HTTP — useful in corporate proxy environments.",
+    "source": f"Chocolatey NuGet v2 repository URL (default: {DEFAULT_CHOCO_REPO}).",
+    "insecure": "Skip TLS certificate verification (insecure).",
+    "pwsh": "Use a system PowerShell (Invoke-WebRequest) backend for HTTP — useful behind aggressive corporate proxies.",
+    "rate_limit": f"Max API requests/sec to avoid HTTP 429 (default: {DEFAULT_RATE_LIMIT}; 0 = unlimited).",
     "skip_download": "Skip installer downloads; rewrite scripts only.",
     "interactive": "Confirm each installer URL before downloading.",
     "force": "Re-download and overwrite existing .nupkg and installer files.",

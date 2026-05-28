@@ -1,4 +1,4 @@
-"""chomp — Chocolatey Handler for Offline Package Mirroring"""
+"""chomp — Chocolatey Handler for Offline Package Mirroring & Processing."""
 
 import argparse
 import sys
@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .config import (
     CLI_HELP,
+    DEFAULT_RATE_LIMIT,
     ensure_repo_structure,
     get_manifest_path,
     get_out_dir,
@@ -16,20 +17,22 @@ from .config import (
     repo_path,
 )
 from .download import download_batch, installer_path, print_failed
-from .fetch import resolve_and_download_packages, resolve_with_deps
+from .fetch import configure as configure_fetch
+from .fetch import resolve_and_download_packages
 from .manifest import print_summary, write_csv, write_json
 from .repack import build_nupkg, collect_urls
 from .term import (
     abort,
     bold,
+    console,
     dim,
     err,
+    err_console,
     fatal,
     info,
     ok,
     section,
     set_verbose,
-    vlog,
     warn,
 )
 
@@ -40,33 +43,23 @@ def build_parser() -> argparse.ArgumentParser:
         description="Chocolatey Handler for Offline Package Mirroring & Processing.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument(
-        "mode",
-        choices=["internalize", "rewrite", "seal", "repack"],
-        help=CLI_HELP["mode"],
-    )
-    p.add_argument(
-        "packages", nargs="*", metavar="PACKAGE[@VERSION]", help=CLI_HELP["packages"]
-    )
+    p.add_argument("mode", choices=["internalize", "rewrite", "seal", "repack"], help=CLI_HELP["mode"])
+    p.add_argument("packages", nargs="*", metavar="PACKAGE[@VERSION]", help=CLI_HELP["packages"])
 
-    p.add_argument(
-        "-p", "--packages-dir", type=Path, metavar="DIR", help=CLI_HELP["packages_dir"]
-    )
-    p.add_argument(
-        "-o", "--out-dir", type=Path, metavar="DIR", help=CLI_HELP["out_dir"]
-    )
-    p.add_argument(
-        "-i", "--installers", type=Path, metavar="DIR", help=CLI_HELP["installers"]
-    )
+    p.add_argument("-p", "--packages-dir", type=Path, metavar="DIR", help=CLI_HELP["packages_dir"])
+    p.add_argument("-o", "--out-dir", type=Path, metavar="DIR", help=CLI_HELP["out_dir"])
+    p.add_argument("-i", "--installers", type=Path, metavar="DIR", help=CLI_HELP["installers"])
     p.add_argument("--fetch-dir", type=Path, metavar="DIR", help=CLI_HELP["fetch_dir"])
     p.add_argument("--in-place", action="store_true", help=CLI_HELP["in_place"])
 
     p.add_argument("-u", "--base-url", metavar="URL", help=CLI_HELP["base_url"])
-
+    p.add_argument("-s", "--source", metavar="URL", help=CLI_HELP["source"])
+    p.add_argument("-k", "--insecure", action="store_true", help=CLI_HELP["insecure"])
     p.add_argument("--pwsh", action="store_true", help=CLI_HELP["pwsh"])
-    p.add_argument(
-        "--skip-download", action="store_true", help=CLI_HELP["skip_download"]
-    )
+    p.add_argument("--rate-limit", type=float, default=DEFAULT_RATE_LIMIT,
+                   metavar="RPS", help=CLI_HELP["rate_limit"])
+
+    p.add_argument("--skip-download", action="store_true", help=CLI_HELP["skip_download"])
     p.add_argument("--interactive", action="store_true", help=CLI_HELP["interactive"])
     p.add_argument("--force", action="store_true", help=CLI_HELP["force"])
     p.add_argument("--deps", action="store_true", help=CLI_HELP["deps"])
@@ -91,42 +84,30 @@ def _get_version(pkg_name="chomp", display_name="CHOMP"):
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     mode = normalize_mode(args.mode)
-    is_dry = args.dry_run
-    force = args.force
+    is_dry, force = args.dry_run, args.force
 
     if args.verbose:
         set_verbose(True)
 
     if mode == "rewrite" and not args.base_url:
-        print(err("rewrite mode requires --base-url"), file=sys.stderr)
+        err_console.print(err("rewrite mode requires --base-url"))
         return 2
+
+    configure_fetch(repo_url=args.source, rate=args.rate_limit,
+                    insecure=args.insecure, use_pwsh=args.pwsh)
 
     base_url = (args.base_url or "").rstrip("/") if mode == "rewrite" else None
     repo_root = get_repo_root()
 
     # ---- Paths ----
-    pkg_dir = (
-        args.packages_dir.resolve()
-        if args.packages_dir
-        else repo_path(repo_root, "nupkgs")
-    )
+    pkg_dir = args.packages_dir.resolve() if args.packages_dir else repo_path(repo_root, "nupkgs")
     pkg_dir = pkg_dir if pkg_dir.exists() else None
-    installer_dir = (
-        args.installers.resolve()
-        if args.installers
-        else repo_path(repo_root, "installers")
-    )
-    fetch_dir = (
-        args.fetch_dir.resolve() if args.fetch_dir else repo_path(repo_root, "nupkgs")
-    )
+    installer_dir = args.installers.resolve() if args.installers else repo_path(repo_root, "installers")
+    fetch_dir = args.fetch_dir.resolve() if args.fetch_dir else repo_path(repo_root, "nupkgs")
     out_dir = args.out_dir.resolve() if args.out_dir else get_out_dir(repo_root, mode)
-
     if args.in_place and pkg_dir:
         out_dir = pkg_dir
-
-    manifest_csv = (
-        args.manifest.resolve() if args.manifest else get_manifest_path(repo_root, mode)
-    )
+    manifest_csv = args.manifest.resolve() if args.manifest else get_manifest_path(repo_root, mode)
 
     # ---- Setup ----
     if not is_dry:
@@ -135,54 +116,40 @@ def main(argv=None) -> int:
         fetch_dir.mkdir(parents=True, exist_ok=True)
 
     # ---- Header ----
-    tags = "".join(
-        [
-            warn(" [DRY RUN]") if is_dry else "",
-            warn(" [--force]") if force else "",
-            info(" [--pwsh]") if args.pwsh else "",
-            info(" [--verbose]") if args.verbose else "",
-        ]
-    )
+    tags = "".join([
+        warn(" [DRY RUN]") if is_dry else "",
+        warn(" [--force]") if force else "",
+        warn(" [insecure]") if args.insecure else "",
+        info(" [--pwsh]") if args.pwsh else "",
+        info(" [--verbose]") if args.verbose else "",
+    ])
     mode_display = f"{mode} ({args.mode})" if args.mode != mode else mode
-    print(f"\n{bold('chomp')} {dim(mode_display)}{tags}")
-    print(dim(f"  repo root : {repo_root}"))
-    print(dim(f"  packages  : {pkg_dir or '(fetch only)'}"))
-    print(dim(f"  installers: {installer_dir}"))
-    print(dim(f"  out       : {out_dir}"))
+    console.print(f"\n{bold('chomp')} {dim(mode_display)}{tags}")
+    console.print(dim(f"  repo root : {repo_root}"))
+    console.print(dim(f"  packages  : {pkg_dir or '(fetch only)'}"))
+    console.print(dim(f"  installers: {installer_dir}"))
+    console.print(dim(f"  out       : {out_dir}"))
     if base_url:
-        print(dim(f"  base URL  : {base_url}"))
+        console.print(dim(f"  base URL  : {base_url}"))
 
     # ---- Package collection ----
-    # Rule: named packages → fetch exactly those.
-    #       --packages-dir (explicit) → sweep that dir.
-    #       Both → fetch named + sweep explicit dir.
-    #       Neither → error.
-    # The default pkg_dir/fetch_dir both point at nupkgs/, so without the
-    # args.packages_dir guard, every previously cached nupkg would be swept
-    # on every run regardless of what was requested.
+    # Named packages → fetch exactly those. --packages-dir → sweep that dir.
+    # Both → fetch + sweep. Neither → error. (The default pkg_dir/fetch_dir both
+    # point at nupkgs/, so the args.packages_dir guard prevents sweeping the cache.)
     nupkgs = []
-
     if args.packages:
         section("Fetching packages")
         if not is_dry:
             fetch_dir.mkdir(parents=True, exist_ok=True)
-            nupkgs.extend(
-                resolve_and_download_packages(
-                    args.packages,
-                    dest_dir=fetch_dir,
-                    use_pwsh=args.pwsh,
-                    quiet=args.quiet,
-                    force=force,
-                    include_deps=args.deps,
-                )
-            )
-
+            nupkgs.extend(resolve_and_download_packages(
+                args.packages, dest_dir=fetch_dir, quiet=args.quiet,
+                force=force, include_deps=args.deps,
+            ))
     if args.packages_dir and pkg_dir:
-        # Only sweep pkg_dir when explicitly passed — not the default nupkgs/ cache.
         nupkgs.extend(sorted(pkg_dir.glob("*.nupkg")))
 
     if not nupkgs:
-        print(err("No packages to process."), file=sys.stderr)
+        err_console.print(err("No packages to process."))
         return 1
 
     # Dedupe by stem
@@ -193,50 +160,35 @@ def main(argv=None) -> int:
             unique.append(n)
     nupkgs = unique
 
-    # ---- Collect URLs (read-only scan of all nupkgs) ----
+    # ---- Phase 1: scan (read-only) ----
     all_mappings = []
-    nupkg_mappings: dict[Path, list[dict]] = {}  # per-package URL maps
-
+    nupkg_mappings: dict[Path, list[dict]] = {}
     section("Phase 1 — Scanning packages")
     for nupkg in nupkgs:
-        result = collect_urls(
-            nupkg=nupkg,
-            base_url=base_url,
-            out_dir=out_dir,
-            mode=mode,
-            force=force,
-        )
+        result = collect_urls(nupkg=nupkg, base_url=base_url, out_dir=out_dir, mode=mode, force=force)
         if result is None:
-            continue  # already exists, skip
+            continue
         nupkg_mappings[nupkg] = result
         all_mappings.extend(result)
 
     if not nupkg_mappings:
-        print(warn("Nothing to do."))
+        console.print(warn("Nothing to do."))
         return 0
 
-    if is_dry:
-        pass  # fall through to summary
-
-    # ---- Download installers ----
-    elif not args.skip_download:
+    # ---- Phase 2/3: download + build (skipped on dry run) ----
+    if not is_dry and not args.skip_download:
         section("Phase 2 — Downloading installers")
         try:
             all_mappings = download_batch(
-                items=all_mappings,
-                installer_dir=installer_dir,
-                use_pwsh=args.pwsh,
-                quiet=args.quiet,
-                interactive=args.interactive,
-                force=force,
+                items=all_mappings, installer_dir=installer_dir,
+                quiet=args.quiet, interactive=args.interactive, force=force,
             )
         except KeyboardInterrupt:
             abort()
             done = sum(1 for m in all_mappings if m.get("downloaded") == "ok")
-            print(warn(f"  {done} installer(s) downloaded before interrupt"))
+            console.print(warn(f"  {done} installer(s) downloaded before interrupt"))
             raise
 
-        # ---- Build final nupkgs ----
         section("Phase 3 — Building packages")
 
         def resolve(m):
@@ -245,14 +197,8 @@ def main(argv=None) -> int:
         with tempfile.TemporaryDirectory(prefix="chomp_") as tmp:
             try:
                 for nupkg, mappings in nupkg_mappings.items():
-                    build_nupkg(
-                        nupkg=nupkg,
-                        mappings=mappings,
-                        local_file_resolver=resolve,
-                        out_dir=out_dir,
-                        work_dir=Path(tmp),
-                        mode=mode,
-                    )
+                    build_nupkg(nupkg=nupkg, mappings=mappings, local_file_resolver=resolve,
+                                out_dir=out_dir, work_dir=Path(tmp), mode=mode)
             except KeyboardInterrupt:
                 abort()
                 raise
@@ -267,10 +213,9 @@ def main(argv=None) -> int:
     print_failed(all_mappings)
 
     if is_dry:
-        print(warn("Dry run complete — nothing written."))
+        console.print(warn("Dry run complete — nothing written."))
     else:
-        print(f"{ok('done')}: {out_dir}")
-
+        console.print(f"{ok('done')}: {out_dir}")
     return 0
 
 
@@ -278,25 +223,19 @@ def entry_point():
     import os
     import traceback
 
-    _show_tb = (
-        os.environ.get("CHOMP_TRACEBACK") or "--verbose" in sys.argv or "-v" in sys.argv
-    )
-
+    show_tb = os.environ.get("CHOMP_TRACEBACK") or "--verbose" in sys.argv or "-v" in sys.argv
     try:
         sys.exit(main())
     except KeyboardInterrupt:
         abort()
         sys.exit(130)
     except Exception as exc:
-        if _show_tb:
+        if show_tb:
             traceback.print_exc()
         else:
-            # Walk cause chain for a useful one-liner
             msg = str(exc).strip() or type(exc).__name__
             cause = exc.__cause__ or exc.__context__
             if cause and str(cause).strip():
                 msg = f"{msg}: {str(cause).strip()}"
-            fatal(
-                msg, hint="re-run with -v for full traceback, or set CHOMP_TRACEBACK=1"
-            )
+            fatal(msg, hint="re-run with -v for full traceback, or set CHOMP_TRACEBACK=1")
         sys.exit(1)
