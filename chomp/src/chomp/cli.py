@@ -41,10 +41,13 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="chomp",
         description="Chocolatey Handler for Offline Package Mirroring & Processing.",
+        epilog="(( \u309c\u25c7\u309c)  tip: `chomp chomp` if you're feeling peckish.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument(
-        "mode", choices=["internalize", "rewrite", "seal", "repack"], help=CLI_HELP["mode"]
+        "mode",
+        choices=["internalize", "rewrite", "seal", "repack", "chomp"],
+        help=CLI_HELP["mode"],
     )
     p.add_argument("packages", nargs="*", metavar="PACKAGE[@VERSION]", help=CLI_HELP["packages"])
 
@@ -90,6 +93,14 @@ def _get_version(pkg_name="chomp", display_name="CHOMP"):
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
+
+    # 🐶 easter egg: `chomp chomp`
+    if args.mode == "chomp":
+        from .art import chomp as _chomp
+
+        _chomp()
+        return 0
+
     mode = normalize_mode(args.mode)
     is_dry, force = args.dry_run, args.force
 
