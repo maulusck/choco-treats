@@ -8,7 +8,14 @@ from .fetch import (
     resolve_package,
     resolve_with_deps,
 )
-from .manifest import print_summary, write_csv, write_json
+from .manifest import (
+    explain,
+    load_manifest,
+    print_summary,
+    summarize,
+    write_csv,
+    write_json,
+)
 from .repack import build_nupkg, classify_url, collect_urls
 
 __all__ = [
@@ -25,5 +32,8 @@ __all__ = [
     "resolve_and_download_packages",
     "write_csv",
     "write_json",
+    "load_manifest",
+    "summarize",
+    "explain",
     "print_summary",
 ]

@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+from .config import now_iso
 from .fetch import http_download
 from .repack import _filename_from_url, apply_filename, classify_url
 from .term import ARROW, CHECK, CROSS, SKIP, WARN, console, dim, err, info, ok
@@ -96,17 +97,18 @@ def download_batch(
         dest = installer_path(item, installer_dir)
 
         if action == "duplicate" or (action is None and key in seen):
-            item.update(downloaded="skipped-duplicate", skip_reason="")
+            item.update(downloaded="skipped-duplicate", skip_reason="", downloaded_at=now_iso())
             continue
         if action == "exists" or (action is None and dest.exists() and not force):
             if not quiet:
                 console.print(f"  {SKIP} {dim('exists:')} {dim(str(dest))}")
-            item.update(downloaded="skipped-exists", skip_reason="")
+            item.update(downloaded="skipped-exists", skip_reason="", downloaded_at=now_iso())
             continue
         if action == "skip":
             item.update(
                 downloaded="skipped-interactive",
                 skip_reason=item.get("skip_reason", "user skipped"),
+                downloaded_at=now_iso(),
             )
             continue
 
@@ -121,14 +123,16 @@ def download_batch(
             if not should_dl:
                 if not quiet:
                     console.print(f"  {SKIP} {warn(f'filtered ({skip_reason}):')} {dim(url)}")
-                item.update(downloaded="skipped-filtered", skip_reason=skip_reason)
+                item.update(
+                    downloaded="skipped-filtered", skip_reason=skip_reason, downloaded_at=now_iso()
+                )
                 continue
 
         try:
             dest.parent.mkdir(parents=True, exist_ok=True)
         except OSError as e:
             console.print(f"  {CROSS} {err('mkdir failed:')} {dim(str(e))}")
-            item.update(downloaded="failed", skip_reason=f"mkdir: {e}")
+            item.update(downloaded="failed", skip_reason=f"mkdir: {e}", downloaded_at=now_iso())
             continue
 
         success, err_msg, server_name = _download_one(url, dest)
@@ -148,7 +152,9 @@ def download_batch(
                         console.print(f"  {ARROW} {dim('named by server:')} {dim(server_name)}")
 
         item.update(
-            downloaded="ok" if success else "failed", skip_reason="" if success else err_msg
+            downloaded="ok" if success else "failed",
+            skip_reason="" if success else err_msg,
+            downloaded_at=now_iso(),
         )
     return items
 

@@ -8,18 +8,22 @@ from pathlib import Path
 
 from .config import (
     CLI_HELP,
+    DEFAULT_CHOCO_REPO,
     DEFAULT_RATE_LIMIT,
     ensure_repo_structure,
+    find_latest_manifest,
     get_manifest_path,
     get_out_dir,
     get_repo_root,
+    new_run_id,
     normalize_mode,
+    now_iso,
     repo_path,
 )
 from .download import download_batch, installer_path, print_failed
 from .fetch import configure as configure_fetch
 from .fetch import resolve_and_download_packages
-from .manifest import print_summary, write_csv, write_json
+from .manifest import explain, print_summary, write_csv, write_json
 from .repack import build_nupkg, collect_urls
 from .term import (
     abort,
@@ -46,10 +50,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "mode",
-        choices=["internalize", "rewrite", "seal", "repack", "chomp"],
+        choices=["internalize", "rewrite", "seal", "repack", "explain", "read", "chomp"],
         help=CLI_HELP["mode"],
     )
-    p.add_argument("packages", nargs="*", metavar="PACKAGE[@VERSION]", help=CLI_HELP["packages"])
+    p.add_argument(
+        "packages",
+        nargs="*",
+        metavar="PACKAGE[@VERSION] | MANIFEST",
+        help=CLI_HELP["packages"],
+    )
 
     p.add_argument("-p", "--packages-dir", type=Path, metavar="DIR", help=CLI_HELP["packages_dir"])
     p.add_argument("-o", "--out-dir", type=Path, metavar="DIR", help=CLI_HELP["out_dir"])
@@ -101,6 +110,22 @@ def main(argv=None) -> int:
         _chomp()
         return 0
 
+    # Report a saved manifest: `chomp explain [PATH]` / `chomp read`.
+    # Path resolution: positional arg → --manifest → latest manifest in repo.
+    if args.mode in ("explain", "read"):
+        target = (
+            Path(args.packages[0])
+            if args.packages
+            else (args.manifest if args.manifest else find_latest_manifest(get_repo_root()))
+        )
+        if not target or not Path(target).exists():
+            err_console.print(err("No manifest found to explain (pass a path or run a job first)."))
+            return 1
+        explain(target)
+        return 0
+
+    run_id = new_run_id()
+    started_at = now_iso()
     mode = normalize_mode(args.mode)
     is_dry, force = args.dry_run, args.force
 
@@ -128,7 +153,9 @@ def main(argv=None) -> int:
     out_dir = args.out_dir.resolve() if args.out_dir else get_out_dir(repo_root, mode)
     if args.in_place and pkg_dir:
         out_dir = pkg_dir
-    manifest_csv = args.manifest.resolve() if args.manifest else get_manifest_path(repo_root, mode)
+    manifest_csv = (
+        args.manifest.resolve() if args.manifest else get_manifest_path(repo_root, mode, run_id)
+    )
 
     # ---- Setup ----
     if not is_dry:
@@ -198,6 +225,9 @@ def main(argv=None) -> int:
         )
         if result is None:
             continue
+        scanned = now_iso()
+        for m in result:
+            m["scanned_at"] = scanned
         nupkg_mappings[nupkg] = result
         all_mappings.extend(result)
 
@@ -253,9 +283,36 @@ def main(argv=None) -> int:
 
     # ---- Output ----
     if not is_dry:
-        write_csv(all_mappings, manifest_csv)
+        run = {
+            "run_id": run_id,
+            "started_at": started_at,
+            "finished_at": now_iso(),
+            "mode": mode,
+            "mode_input": args.mode,
+            "chomp_version": _get_version(),
+            "source": (args.source or DEFAULT_CHOCO_REPO).rstrip("/"),
+            "base_url": base_url,
+            "dry_run": is_dry,
+            "flags": {
+                "force": force,
+                "deps": args.deps,
+                "insecure": args.insecure,
+                "pwsh": args.pwsh,
+                "skip_download": args.skip_download,
+                "interactive": args.interactive,
+                "in_place": args.in_place,
+            },
+            "packages_requested": list(args.packages),
+            "out_dir": str(out_dir),
+            "installer_dir": str(installer_dir),
+            "fetch_dir": str(fetch_dir),
+        }
+        write_csv(all_mappings, manifest_csv, run_id=run_id)
+        # JSON sidecar always written (carries run metadata; powers `chomp explain`).
+        json_sidecar = manifest_csv.with_suffix(".json")
+        write_json(run, all_mappings, json_sidecar)
         if args.manifest_json:
-            write_json(all_mappings, args.manifest_json)
+            write_json(run, all_mappings, args.manifest_json.resolve())
 
     print_summary(all_mappings)
     print_failed(all_mappings)
@@ -264,6 +321,8 @@ def main(argv=None) -> int:
         console.print(warn("Dry run complete — nothing written."))
     else:
         console.print(f"{ok('done')}: {out_dir}")
+        console.print(dim(f"  manifest  : {manifest_csv}"))
+        console.print(dim(f"  explain   : chomp explain {json_sidecar}"))
     return 0
 
 

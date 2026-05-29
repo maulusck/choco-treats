@@ -1,6 +1,7 @@
 """chomp.config — Single source of truth for paths, modes, defaults, CLI help."""
 
 import os
+import secrets
 from dataclasses import dataclass, fields
 from datetime import datetime
 from pathlib import Path
@@ -55,9 +56,25 @@ def get_out_dir(root: Path, mode: str) -> Path:
     return repo_path(root, _MODE_OUT_FIELD[validate_mode(mode)])
 
 
-def get_manifest_path(root: Path, mode: str) -> Path:
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return repo_path(root, "manifests") / f"{validate_mode(mode)}_{ts}.csv"
+def now_iso() -> str:
+    """Local timestamp with offset, second precision (e.g. 2026-05-29T14:30:22-07:00)."""
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def new_run_id() -> str:
+    """Sortable, collision-resistant id: <timestamp>_<hex4> (e.g. 20260529_143022_a1b2)."""
+    return f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{secrets.token_hex(2)}"
+
+
+def get_manifest_path(root: Path, mode: str, run_id: str) -> Path:
+    return repo_path(root, "manifests") / f"{validate_mode(mode)}_{run_id}.csv"
+
+
+def find_latest_manifest(root: Path, suffix: str = ".json") -> Path | None:
+    """Most recently modified manifest in the repo's manifests dir, or None."""
+    d = repo_path(root, "manifests")
+    files = [p for p in d.glob(f"*{suffix}")] if d.exists() else []
+    return max(files, key=lambda p: p.stat().st_mtime) if files else None
 
 
 def ensure_repo_structure(root: Path) -> None:
@@ -68,8 +85,8 @@ def ensure_repo_structure(root: Path) -> None:
 # ── CLI help text ─────────────────────────────────────────────────────────────
 
 CLI_HELP = {
-    "mode": "internalize/seal — embed installers inside nupkg. rewrite/repack — rewrite URLs to internal server.",
-    "packages": "Package names to fetch from Chocolatey (e.g. googlechrome 7zip@24.9).",
+    "mode": "internalize/seal — embed installers inside nupkg. rewrite/repack — rewrite URLs to internal server. explain/read — print a saved manifest report.",
+    "packages": "Package names to fetch (e.g. googlechrome 7zip@24.9). For explain/read: an optional manifest path.",
     "packages_dir": "Directory containing existing .nupkg files to process.",
     "out_dir": f"Output directory (default: $CHOMP_REPO/{REPO_LAYOUT.out_internalized} or …/{REPO_LAYOUT.out_rewritten}).",
     "installers": f"Installer staging directory (default: $CHOMP_REPO/{REPO_LAYOUT.installers}/).",
